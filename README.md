@@ -1,10 +1,14 @@
 # 植物百科
 
-本项目是可在本地运行的植物资料库。Windows 客户下载发行包后，解压覆盖现有目录即可更新程序，原有数据库和图片会保留在本机 `data` 目录中。
+本项目是可在本地运行的植物资料库。Windows 客户从本页面下载 ZIP 后，解压覆盖现有目录即可更新程序，原有数据库和图片会保留在本机 `data` 目录中。
 
 ## 客户下载方式
 
-请在 GitHub Releases 中下载 `botanical-vX.X.X.zip`，不要下载 Source code 压缩包。发行包已经排除本地数据库和图片，并包含 Windows 启动入口。
+在本页面右上角点击绿色 `Code`，选择 `Download ZIP`。
+
+下载后会得到类似 `Personal-Plant-Database-main.zip` 的文件。解压后进入里面那层 `Personal-Plant-Database-main` 文件夹，把其中所有内容复制到原来的程序目录并选择覆盖。不要删除原程序目录里的 `data` 文件夹。
+
+这个 ZIP 已排除维护脚本、GitHub 工作流和本地客户数据，只保留客户运行和更新所需的文件。
 
 ## Windows 使用
 
@@ -36,4 +40,4 @@ python3 tools/publish_release.py --repo-url https://github.com/<账号>/<仓库>
 python3 tools/publish_release.py
 ```
 
-脚本会先运行检查和打包，只提交程序文件与参考数据，然后推送当前分支和版本 tag。GitHub Actions 会根据 tag 自动创建 Release，并上传客户可下载的 `botanical-vX.X.X.zip`。
+脚本会先运行检查和打包，只提交程序文件与参考数据，然后推送当前分支和版本 tag。GitHub Actions 会根据 tag 自动创建 Release。客户也可以直接使用首页右上角 `Code -> Download ZIP` 下载当前最新版。

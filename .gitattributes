@@ -1,0 +1,12 @@
+.github/ export-ignore
+.gitattributes export-ignore
+.gitignore export-ignore
+publish-github.bat export-ignore
+publish-github.command export-ignore
+tools/build_release.py export-ignore
+tools/import.py export-ignore
+tools/import_dict.py export-ignore
+tools/import_foc.py export-ignore
+tools/publish_release.py export-ignore
+tools/retrim_descriptions.py export-ignore
+tools/trim_to_orchidaceae.py export-ignore

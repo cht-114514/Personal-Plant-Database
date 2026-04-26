@@ -1,0 +1,17 @@
+.DS_Store
+.idea/
+.vscode/
+.claude/
+.codex-backup-*/
+
+dist/
+node_modules/
+__pycache__/
+*.pyc
+*.bak
+*.tmp
+*.restore-tmp
+
+data/botanical.db
+data/botanical.db.*
+data/images/

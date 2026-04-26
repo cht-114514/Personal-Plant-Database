@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>植物资料库</title>
+  <link rel="stylesheet" href="css/style.css?v=v3.2.2">
+</head>
+<body>
+  <div id="app">
+    <!-- 顶部栏 -->
+    <header class="top-bar">
+      <div class="top-bar-left">
+        <button class="sidebar-toggle" @click="showExplorer = true" title="分类导航与检索表">
+          <span class="icon-menu">☰</span>
+        </button>
+        <h1 class="site-title" @click="goHome">植物资料库 <span class="site-title-latin">Herbarium</span></h1>
+      </div>
+      <div class="search-wrapper">
+        <input
+          type="text"
+          class="search-input"
+          v-model="searchQuery"
+          @input="onSearchInput"
+          @keydown.enter="doSearch"
+          @keydown.escape="clearSearch"
+          placeholder="搜索中文名、拉丁名、地点、命名人……"
+          ref="searchInput"
+        >
+        <button v-if="searchQuery" class="search-clear" @click="clearSearch">&times;</button>
+      </div>
+      <div class="top-bar-right">
+        <button
+          v-if="pendingCount > 0"
+          class="btn-pending"
+          @click="openPendingQueue"
+          :title="`${pendingCount} 个待审定项`"
+        >待审定 {{ pendingCount }}</button>
+        <button class="btn-quick-add" @click="openAddTaxonDialog({parentLevel:'genus', parentName:''})" title="快捷新增物种">+ 新增</button>
+        <button class="btn-import" @click="showImportDialog = true" title="导入植物数据">导入</button>
+        <span class="plant-count" v-if="totalPlants > 0">{{ totalPlants }} 种</span>
+        <button class="btn-settings" @click="openSettings" title="设置">⚙</button>
+        <span class="version-badge" v-if="appVersion" :title="`植物百科 ${appVersion}`">{{ appVersion }}</span>
+      </div>
+    </header>
+
+    <!-- 主体区域 -->
+    <div class="main-layout" v-show="currentRoute.page !== 'admin'">
+      <!-- 主内容区 -->
+      <main class="content" ref="scrollContentRef">
+        <!-- 面包屑 -->
+        <nav class="breadcrumb" v-if="breadcrumbs.length > 0">
+          <span
+            v-for="(crumb, i) in breadcrumbs"
+            :key="i"
+            class="breadcrumb-item"
+            :class="{ active: i === breadcrumbs.length - 1 }"
+            @click="onBreadcrumbClick(crumb, i)"
+          >
+            {{ crumb.label }}
+            <span v-if="i < breadcrumbs.length - 1" class="breadcrumb-sep"> &rsaquo; </span>
+          </span>
+        </nav>
+
+        <!-- 搜索结果提示 -->
+        <div class="search-info" v-if="isSearching">
+          搜索 "{{ searchQuery }}" — 找到 {{ filteredPlants.length }} 个结果
+          <button class="btn-link" @click="clearSearch">清除搜索</button>
+        </div>
+
+        <!-- 词典结果 -->
+        <div class="dict-results" v-if="dictionaryResults.length > 0 && isSearching">
+          <div class="dict-results-title">拉丁词典</div>
+          <div class="dict-entry" v-for="entry in dictionaryResults" :key="entry.id">
+            <span class="dict-term">{{ entry.latin_term }}</span>
+            <span class="dict-meaning-cn" v-if="entry.chinese_meaning">{{ entry.chinese_meaning }}</span>
+            <span class="dict-meaning-en" v-if="entry.english_meaning">{{ entry.english_meaning }}</span>
+            <span class="dict-pronunciation" v-if="entry.pronunciation">[{{ entry.pronunciation }}]</span>
+          </div>
+        </div>
+
+        <!-- 植物详情页 -->
+        <div v-if="currentPlant" class="plant-detail-view">
+          <plant-detail
+            :plant="currentPlant"
+            :photos="currentPhotos"
+            :infraspecific-taxa="currentInfraspecific"
+            :parent-plant="currentParentPlant"
+            @back="currentPlant = null; currentParentPlant = null"
+            @delete-plant="deletePlant"
+            @delete-photo="deletePhoto"
+            @save-photo-meta="savePhotoMeta"
+            @save-description="saveDescription"
+            @add-photos="addPhotosToPlant"
+            @open-infraspecific="openPlant"
+            @open-parent="openPlant"
+            @navigate-taxonomy="onTaxonomyNavigate"
+            @revise="openReviseDialog"
+            @open-foc-import="openFOCImport"
+          ></plant-detail>
+        </div>
+
+        <!-- 主页视图：Hero 风 Overview + Family Sections -->
+        <div v-else-if="isHomeView" class="content-home">
+          <!-- 三栏概览：分类 / 地理 / 工具 -->
+          <section class="overview-row" v-if="topFamilies.length > 0 || topRegions.length > 0">
+            <div class="overview-col">
+              <h3 class="overview-title">按分类浏览</h3>
+              <p class="overview-sub">Browse by Taxonomy</p>
+              <ul class="overview-list">
+                <li v-for="f in topFamilies" :key="f.family" @click="onTaxonomyNavigate({ level: 'family', value: f.family })">
+                  <span class="ov-rank">科</span>
+                  <span class="ov-name">{{ f.familyZh }} <i>{{ f.familyLatin }}</i></span>
+                  <span class="ov-count">{{ f.count }}</span>
+                </li>
+              </ul>
+              <a class="overview-more" @click="showExplorer = true">查看全部 {{ totalFamilies }} 科 &rsaquo;</a>
+            </div>
+            <div class="overview-col">
+              <h3 class="overview-title">按地理浏览</h3>
+              <p class="overview-sub">Browse by Region</p>
+              <ul class="overview-list" v-if="topRegions.length > 0">
+                <li v-for="r in topRegions" :key="r.code" @click="openAdminPage(r.code)">
+                  <span class="ov-rank">{{ r.levelLabel }}</span>
+                  <span class="ov-name">{{ r.name }}</span>
+                  <span class="ov-count">{{ r.count }}</span>
+                </li>
+              </ul>
+              <p v-else class="overview-sub" style="margin-top:14px">暂无照片地理数据</p>
+            </div>
+            <div class="overview-col">
+              <h3 class="overview-title">检索工具</h3>
+              <p class="overview-sub">Tools</p>
+              <ul class="overview-tools">
+                <li @click="showExplorer = true">
+                  <span class="tool-mark">⌖</span>
+                  <div><strong>分类检索表</strong><span>Flora of China 二歧检索表</span></div>
+                </li>
+                <li @click="openDictionary">
+                  <span class="tool-mark">¶</span>
+                  <div><strong>拉丁词典</strong><span>种加词词源查询</span></div>
+                </li>
+                <li @click="showImportDialog = true; importTab = 'foc'">
+                  <span class="tool-mark">◇</span>
+                  <div><strong>FOC 文献</strong><span>原始 PDF 解析与导入</span></div>
+                </li>
+                <li v-if="pendingCount > 0" @click="openPendingQueue">
+                  <span class="tool-mark">⊕</span>
+                  <div><strong>待审定队列</strong><span>{{ pendingCount }} 项待审定</span></div>
+                </li>
+              </ul>
+            </div>
+          </section>
+
+          <!-- 各科章节 -->
+          <section class="family-block" v-for="fb in familyBlocks" :key="fb.family">
+            <header class="family-header">
+              <div class="family-header-l">
+                <span class="family-letter">{{ fb.letter }}</span>
+                <div>
+                  <h2 class="family-cn">{{ fb.familyZh }}</h2>
+                  <p class="family-latin"><i>{{ fb.familyLatin }}</i></p>
+                </div>
+              </div>
+              <div class="family-header-r">
+                <span class="family-stat"><b>{{ fb.count }}</b> 种</span>
+                <span class="family-stat" v-if="fb.genusCount"><b>{{ fb.genusCount }}</b> 属</span>
+                <a class="family-jump" @click="onTaxonomyNavigate({ level: 'family', value: fb.family })">进入科页 &rsaquo;</a>
+              </div>
+            </header>
+            <div class="card-grid">
+              <article
+                v-for="plant in fb.samples"
+                :key="plant.id"
+                class="plant-card"
+                @click="openPlant(plant)"
+              >
+                <div class="card-image">
+                  <img v-if="plant.primary_photo_url" :src="plant.primary_photo_url" :alt="plant.chinese_name" loading="lazy">
+                  <div v-else class="card-image-placeholder"><span>🌿</span></div>
+                </div>
+                <div class="card-info">
+                  <div class="card-name">{{ plant.chinese_name || '未命名' }}</div>
+                  <div class="card-latin"><i>{{ plant.latin_name }}</i></div>
+                  <div class="card-meta">
+                    <span class="card-author" v-if="plant.authority">{{ plant.authority }}</span>
+                    <span class="card-family" v-if="plant.family">{{ plant.family }}</span>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <div v-if="familyBlocks.length === 0 && !loading" class="empty-state">
+            <div class="empty-icon">🌱</div>
+            <p>还没有植物数据</p>
+            <p class="empty-hint">点击右上角「导入」按钮添加植物照片</p>
+          </div>
+        </div>
+
+        <!-- 搜索 / 分类导航视图：扁平卡片网格 -->
+        <div v-else class="card-grid">
+          <article
+            v-for="plant in displayedPlants"
+            :key="plant.id"
+            class="plant-card"
+            @click="openPlant(plant)"
+          >
+            <div class="card-image">
+              <img
+                v-if="plant.primary_photo_url"
+                :src="plant.primary_photo_url"
+                :alt="plant.chinese_name"
+                loading="lazy"
+              >
+              <div v-else class="card-image-placeholder">
+                <span>🌿</span>
+              </div>
+            </div>
+            <div class="card-info">
+              <div class="card-name">{{ plant.chinese_name || '未命名' }}</div>
+              <div class="card-latin"><i>{{ plant.latin_name }}</i></div>
+              <div class="card-meta">
+                <span class="card-author" v-if="plant.authority">{{ plant.authority }}</span>
+                <span class="card-family" v-if="plant.family">{{ plant.family }}</span>
+              </div>
+            </div>
+          </article>
+          <div v-if="filteredPlants.length === 0 && !loading" class="empty-state">
+            <div class="empty-icon">🌱</div>
+            <p v-if="isSearching">没有找到匹配的植物</p>
+            <p v-else>还没有植物数据</p>
+            <p class="empty-hint">点击右上角「导入」按钮添加植物照片</p>
+          </div>
+        </div>
+        <!-- 无限滚动哨兵 -->
+        <div ref="sentinelRef" v-show="hasMore && !currentPlant" class="scroll-sentinel">
+          <span class="loading-more-text">加载中...</span>
+        </div>
+      </main>
+    </div>
+
+    <!-- 全屏分类导航与检索表 -->
+    <taxonomy-explorer
+      :visible="showExplorer"
+      :tree="taxonomyTree"
+      :initial-taxon="explorerInitialTaxon"
+      @close="closeExplorer"
+      @navigate-plant="onExplorerNavigatePlant"
+      @revise="openReviseDialog"
+      @add-taxon="openAddTaxonDialog"
+    ></taxonomy-explorer>
+
+    <!-- v3: 审定队列 -->
+    <pending-queue
+      :visible="showPendingQueue"
+      @close="closeOverlay"
+      @refresh="refreshPendingCount"
+    ></pending-queue>
+
+    <!-- v3.2: 拉丁词典侧边面板 -->
+    <dictionary-panel
+      :visible="showDictionary"
+      @close="closeDictionary"
+    ></dictionary-panel>
+
+    <!-- v3: 修订对话框 -->
+    <revise-dialog
+      :visible="reviseDialog.visible"
+      :target-level="reviseDialog.targetLevel"
+      :target-plant="reviseDialog.targetPlant"
+      :target-taxon-name="reviseDialog.targetTaxonName"
+      @close="closeReviseDialog"
+      @submitted="onTaxonRevisionSubmitted"
+    ></revise-dialog>
+
+    <!-- v3: 新增分类对话框 -->
+    <add-taxon-dialog
+      :visible="addTaxonDialog.visible"
+      :parent-level="addTaxonDialog.parentLevel"
+      :parent-name="addTaxonDialog.parentName"
+      @close="closeAddTaxonDialog"
+      @submitted="onTaxonRevisionSubmitted"
+    ></add-taxon-dialog>
+
+    <!-- v3.2: 设置面板 -->
+    <settings-dialog
+      :visible="showSettings"
+      :families-per-page="settings.familiesPerPage"
+      @close="closeSettings"
+      @update-settings="onSettingsChanged"
+      @restored="onDatabaseRestored"
+    ></settings-dialog>
+
+    <!-- v3: 行政区划页面 -->
+    <admin-page
+      v-if="currentRoute.page === 'admin'"
+      :code="currentRoute.code"
+      @close="closeOverlay"
+      @open-plant="openPlant"
+      @open-admin="openAdminPage"
+    ></admin-page>
+
+    <!-- 导入对话框 -->
+    <div class="modal-overlay" v-if="showImportDialog" @click.self="showImportDialog = false">
+      <div class="modal import-modal">
+        <div class="modal-header">
+          <h2>导入植物数据</h2>
+          <button class="modal-close" @click="showImportDialog = false">&times;</button>
+        </div>
+        <!-- 标签栏 -->
+        <div class="import-tabs">
+          <button class="import-tab" :class="{ active: importTab === 'ppbc' }" @click="importTab = 'ppbc'">PPBC 照片</button>
+          <button class="import-tab" :class="{ active: importTab === 'foc' }" @click="importTab = 'foc'">FOC 文献</button>
+          <button class="import-tab" :class="{ active: importTab === 'manual' }" @click="importTab = 'manual'">手动录入</button>
+        </div>
+        <div class="modal-body">
+          <!-- PPBC 照片标签页 -->
+          <div v-if="importTab === 'ppbc'">
+            <div
+              class="drop-zone"
+              :class="{ 'drag-over': isDragOver }"
+              @dragover.prevent="isDragOver = true"
+              @dragleave="isDragOver = false"
+              @drop.prevent="onFileDrop"
+            >
+              <div class="drop-zone-content">
+                <span class="drop-icon">📂</span>
+                <p>将 PPBC 格式的植物照片拖放到这里</p>
+                <p class="drop-hint">支持的文件名格式：拉丁名 中文名 PPBC ID 拍摄者 地点</p>
+                <p class="drop-hint">或者 <label class="file-label"><input type="file" multiple accept="image/*" @change="onFileSelect" ref="fileInput" class="file-input">选择文件</label></p>
+              </div>
+            </div>
+          </div>
+
+          <!-- FOC 文献标签页（Phase 3D 实现） -->
+          <div v-if="importTab === 'foc'">
+            <p class="foc-import-hint" v-if="importHintFamily">
+              建议导入对应科：<i>{{ importHintFamily }}</i>
+            </p>
+            <div
+              class="drop-zone"
+              :class="{ 'drag-over': isDragOver }"
+              @dragover.prevent="isDragOver = true"
+              @dragleave="isDragOver = false"
+              @drop.prevent="onFOCFileDrop"
+            >
+              <div class="drop-zone-content">
+                <span class="drop-icon">📄</span>
+                <p>将 Flora of China PDF 文件拖放到这里</p>
+                <p class="drop-hint">文件名格式：LatinFamily 中文科名.pdf</p>
+                <p class="drop-hint">或者 <label class="file-label"><input type="file" accept=".pdf" @change="onFOCFileSelect" ref="focFileInput" class="file-input">选择 PDF</label></p>
+              </div>
+            </div>
+            <!-- FOC 解析预览 -->
+            <div v-if="focParseResult" class="foc-preview">
+              <h3>解析预览</h3>
+              <div class="foc-preview-info">
+                <span>科：{{ focParseResult.familyDisplay }}</span>
+                <span>{{ focParseResult.generaCount }} 属</span>
+                <span>{{ focParseResult.speciesCount }} 种</span>
+              </div>
+              <div class="foc-preview-actions">
+                <button class="btn-save" @click="confirmFOCImport">确认导入</button>
+                <button class="btn-cancel" @click="focParseResult = null">取消</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 手动录入标签页 -->
+          <div v-if="importTab === 'manual'">
+            <div class="add-species-form">
+              <div class="form-row">
+                <label>属名 <span class="required">*</span></label>
+                <input type="text" v-model="addSpeciesForm.genus"
+                       placeholder="如 Begonia" @input="onGenusInput">
+                <div class="genus-lookup-result" v-if="genusLookupResult">
+                  {{ genusLookupResult.family }}
+                </div>
+              </div>
+              <div class="form-row">
+                <label>种加词 <span class="required">*</span></label>
+                <input type="text" v-model="addSpeciesForm.species_epithet" placeholder="如 grandis">
+              </div>
+              <div class="form-row">
+                <label>命名人</label>
+                <input type="text" v-model="addSpeciesForm.authority" placeholder="如 Dryander">
+              </div>
+              <div class="form-row">
+                <label>中文名 <span class="required">*</span></label>
+                <input type="text" v-model="addSpeciesForm.chinese_name" placeholder="如 秋海棠">
+              </div>
+              <div class="form-row">
+                <label>简介</label>
+                <textarea v-model="addSpeciesForm.description" placeholder="形态描述（可选）" rows="3"></textarea>
+              </div>
+              <div class="form-row">
+                <label>备注</label>
+                <textarea v-model="addSpeciesForm.notes" placeholder="补充说明（可选）" rows="2"></textarea>
+              </div>
+              <div class="form-actions">
+                <button class="btn-save" @click="submitAddSpecies"
+                        :disabled="!canSubmitSpecies">添加</button>
+                <button class="btn-cancel" @click="showImportDialog = false">取消</button>
+              </div>
+              <div v-if="addSpeciesResult" class="add-species-result" :class="addSpeciesResult.status">
+                <span>{{ addSpeciesResult.status === 'success' ? '✓' : '✗' }}</span>
+                {{ addSpeciesResult.message }}
+              </div>
+            </div>
+          </div>
+
+          <!-- 导入结果（PPBC 和 FOC 共用） -->
+          <div v-if="importResults.length > 0 && importTab !== 'manual'" class="import-results">
+            <h3>导入结果</h3>
+            <div v-for="r in importResults" :key="r.filename" class="import-result-item" :class="r.status">
+              <span class="result-icon">{{ r.status === 'success' ? '✓' : '✗' }}</span>
+              <span class="result-name">{{ r.filename }}</span>
+              <span class="result-msg">{{ r.message }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 加载状态 -->
+    <div class="loading-overlay" v-if="loading">
+      <div class="loading-spinner"></div>
+      <p>加载数据库中...</p>
+    </div>
+
+    <toast-center></toast-center>
+  </div>
+
+  <script src="lib/vue.global.prod.js"></script>
+  <script src="lib/sql-wasm.js"></script>
+  <script src="js/db.js?v=v3.2.2"></script>
+  <script src="js/foc-parser.js?v=v3.2.2"></script>
+  <script src="js/components.js?v=v3.2.2"></script>
+  <script src="js/app.js?v=v3.2.2"></script>
+</body>
+</html>

@@ -1094,6 +1094,130 @@ const BotanicalDB = {
     return plants.length > 0 ? plants[0] : null;
   },
 
+  /** PPBC 导入：按完整拉丁 + 种加词(含种下) + 中文名 解析目标物种（含种下分类行） */
+  findPlantForPPBC(parsed) {
+    if (!parsed) return null;
+    const normCn = (s) =>
+      (s || '')
+        .normalize('NFKC')
+        .replace(/[\s\u3000\u200b-\u200d\ufeff]+/g, '')
+        .toLowerCase();
+    const normLat = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const parsedCn = normCn(parsed.chinese_name);
+    const pl = normLat(parsed.latin_name);
+
+    if (pl && !pl.startsWith('[ppbc')) {
+      let r = this.findPlantByLatinName(parsed.latin_name);
+      if (r && parsedCn && normCn(r.chinese_name) !== parsedCn) {
+        r = null;
+      } else if (r) {
+        return r;
+      }
+      const ci = this._toObjects(
+        this.db.exec(`SELECT * FROM plants WHERE lower(trim(latin_name)) = ?`, [pl])
+      );
+      if (ci.length >= 1) {
+        if (parsedCn) {
+          const byCn = ci.filter((row) => normCn(row.chinese_name) === parsedCn);
+          if (byCn.length === 1) return byCn[0];
+        }
+        if (ci.length === 1) {
+          const one = ci[0];
+          if (!parsedCn || normCn(one.chinese_name) === parsedCn) return one;
+        }
+      }
+    }
+
+    if (!parsed.genus || !parsed.species_epithet) return null;
+
+    const fullEp = parsed.species_epithet.trim();
+    const genusLower = String(parsed.genus).toLowerCase();
+    const rowsFull = this._toObjects(
+      this.db.exec(
+        `SELECT * FROM plants WHERE lower(genus) = ? AND trim(species_epithet) = ?`,
+        [genusLower, fullEp]
+      )
+    );
+    if (rowsFull.length === 1) {
+      const one = rowsFull[0];
+      if (!parsedCn || normCn(one.chinese_name) === parsedCn) return one;
+    }
+    if (rowsFull.length > 1 && parsedCn) {
+      const hit = rowsFull.find((row) => normCn(row.chinese_name) === parsedCn);
+      if (hit) return hit;
+    }
+
+    const firstTok = fullEp.split(/\s+/)[0];
+    const rowsSp = this._toObjects(
+      this.db.exec(
+        `SELECT * FROM plants WHERE lower(genus) = ? AND trim(species_epithet) = ?`,
+        [genusLower, firstTok]
+      )
+    );
+    if (rowsSp.length === 1) {
+      const only = rowsSp[0];
+      const onlyL = normLat(only.latin_name || '');
+      const cnMatch = !parsedCn || normCn(only.chinese_name) === parsedCn;
+      const plIsLongerInfraspecific = !!(pl && onlyL && pl.startsWith(onlyL + ' ') && pl.length > onlyL.length);
+      if (parsedCn && !cnMatch && rowsFull.length > 0) {
+        const byCn = rowsFull.find((row) => normCn(row.chinese_name) === parsedCn);
+        if (byCn) return byCn;
+      }
+      if (cnMatch && !plIsLongerInfraspecific) return only;
+    }
+
+    const likeRows = this._toObjects(
+      this.db.exec(
+        `SELECT * FROM plants WHERE lower(genus) = ?
+         AND (species_epithet LIKE ? OR species_epithet LIKE ? OR latin_name LIKE ?)`,
+        [genusLower, `${firstTok} %`, `% ${firstTok} %`, `% ${firstTok} %`]
+      )
+    );
+    if (likeRows.length === 0) return null;
+    if (parsedCn) {
+      const exactCn = likeRows.filter((row) => normCn(row.chinese_name) === parsedCn);
+      if (exactCn.length === 1) return exactCn[0];
+      if (exactCn.length > 1) {
+        let best = null;
+        for (const c of exactCn) {
+          const cl = normLat(c.latin_name);
+          if (pl && (cl === pl || pl.startsWith(cl + ' ') || cl.startsWith(pl + ' '))) {
+            if (!best || (c.latin_name || '').length > (best.latin_name || '').length) best = c;
+          }
+        }
+        if (best) return best;
+        return exactCn[0];
+      }
+    }
+    if (pl) {
+      let best = null;
+      for (const c of likeRows) {
+        const cl = normLat(c.latin_name);
+        if (cl === pl || (pl.startsWith(cl + ' ') && pl.length > cl.length)) {
+          if (!best || (c.latin_name || '').length > (best.latin_name || '').length) best = c;
+        }
+      }
+      if (best) return best;
+    }
+    if (parsedCn && likeRows.length > 1) {
+      const se = (row) => String(row.species_epithet || '').trim();
+      const rankIn = (s) => /\b(var\.|subsp\.|ssp\.|f\.)\b/i.test(s || '');
+      const parentLike = likeRows.find((row) =>
+        !row.parent_id
+        && String(row.genus || '').toLowerCase() === genusLower
+        && se(row) === firstTok
+        && !rankIn(row.latin_name)
+      );
+      if (parentLike && normCn(parentLike.chinese_name) !== parsedCn) {
+        const byCn = likeRows.find(
+          (row) => row.id !== parentLike.id && normCn(row.chinese_name) === parsedCn
+        );
+        if (byCn) return byCn;
+      }
+    }
+    return likeRows[0];
+  },
+
   /** 更新植物任意文本字段 */
   updatePlantField(plantId, field, value) {
     const allowed = ['description', 'notes', 'synonyms', 'description_habitat',

@@ -25,17 +25,15 @@ const PPBCParser = {
       const left = name.substring(0, ppbcAnchor.index);   // "拉丁名_中文名"
       const right = name.substring(ppbcAnchor.index + ppbcAnchor[0].length); // "拍摄者_地点"
       const ppbcId = ppbcAnchor[1];
+      const rightParts = right.split(sepRe).filter(Boolean);
+      const photographer = rightParts[0] || null;
+      const location = rightParts.slice(1).join(' ') || null;
 
       // 左半：拉丁名 + 中文名（以第一个汉字为界）
       const leftMatch = left.match(/^(.+?)[\s_]+([\u4e00-\u9fff\u3400-\u4dbf].*)$/);
       if (leftMatch) {
         const latinRaw = leftMatch[1].replace(/\+/g, ' ').trim();
         const chineseName = leftMatch[2].replace(/_/g, ' ').trim();
-
-        // 右半：按分隔符拆 — 第一段 = 拍摄者，其余 = 地点
-        const rightParts = right.split(sepRe).filter(Boolean);
-        const photographer = rightParts[0] || null;
-        const location = rightParts.slice(1).join(' ') || null;
 
         return {
           latin_name: latinRaw,
@@ -46,6 +44,36 @@ const PPBCParser = {
           ...this.parseLatinName(latinRaw)
         };
       }
+
+      // 仅有中文类群名（无拉丁），避免退回整串 simpleMatch 把拍摄者误作中文名
+      const leftTrim = left.replace(/_/g, ' ').trim();
+      if (
+        leftTrim.length > 0
+        && /^[\u4e00-\u9fff\u3400-\u4dbf]/.test(leftTrim)
+        && /^[\u4e00-\u9fff\u3400-\u4dbf·\s-–—]+$/.test(leftTrim)
+      ) {
+        return {
+          latin_name: `[PPBC ${ppbcId} 待定]`,
+          chinese_name: leftTrim,
+          ppbc_id: ppbcId,
+          photographer,
+          location,
+          genus: null,
+          species_epithet: null,
+          authority: null
+        };
+      }
+
+      // 有 PPBC 但左段无法用「拉丁 + 中文」解析：保留元数据，拉丁/中文留空以待审定
+      const latinRaw = leftTrim.replace(/\+/g, ' ');
+      return {
+        latin_name: latinRaw.length ? latinRaw : `[PPBC ${ppbcId} 待定]`,
+        chinese_name: null,
+        ppbc_id: ppbcId,
+        photographer,
+        location,
+        ...this.parseLatinName(latinRaw)
+      };
     }
 
     // 退化：提取拉丁名和中文名（以第一个汉字为界）
@@ -74,24 +102,27 @@ const PPBCParser = {
     };
   },
 
-  /** 解析拉丁学名为 属 + 种加词 + 命名人 */
+  /** 解析拉丁学名为 属 + 种加词(含 var./subsp. 等) + 命名人 */
   parseLatinName(latin) {
-    // 格式: "Genus species Authority" 或 "Genus species var. subspecies Auth."
-    const parts = latin.split(/\s+/);
-    if (parts.length >= 2) {
-      const genus = parts[0];
-      let speciesEpithet = parts[1];
-      // 命名人通常以大写字母开头或含有点号
-      let authorityStart = 2;
-      // 如果第二个词是 var./subsp./f. 等，种加词包含更多
-      if (['var.', 'subsp.', 'f.', 'ssp.'].includes(parts[1])) {
-        speciesEpithet = parts.slice(1, 3).join(' ');
-        authorityStart = 3;
-      }
-      const authority = parts.slice(authorityStart).join(' ') || null;
-      return { genus, species_epithet: speciesEpithet, authority };
+    const parts = String(latin || '').trim().split(/\s+/).filter(Boolean);
+    if (parts.length < 2) {
+      return { genus: parts[0] || null, species_epithet: null, authority: null };
     }
-    return { genus: parts[0] || null, species_epithet: null, authority: null };
+    const genus = parts[0];
+    const rankMarkers = new Set(['var.', 'subsp.', 'ssp.', 'f.', 'subvar.', 'nothovar.']);
+    let i = 1;
+    const epithetParts = [parts[i++]];
+    while (i < parts.length && rankMarkers.has(parts[i])) {
+      epithetParts.push(parts[i++]);
+      if (i < parts.length && !rankMarkers.has(parts[i])) {
+        epithetParts.push(parts[i++]);
+      } else {
+        break;
+      }
+    }
+    const species_epithet = epithetParts.join(' ');
+    const authority = i < parts.length ? parts.slice(i).join(' ') || null : null;
+    return { genus, species_epithet, authority };
   }
 };
 
@@ -700,9 +731,7 @@ const app = createApp({
 
             // 校验解析出的物种是否就是当前详情页的物种(用二元组,忽略命名人)
             if (target && parsed.genus && parsed.species_epithet) {
-              const parsedMatch = BotanicalDB.findPlantByBinomial(
-                parsed.genus, parsed.species_epithet
-              );
+              const parsedMatch = BotanicalDB.findPlantForPPBC(parsed);
               if (parsedMatch && parsedMatch.id !== plantId) {
                 const ok = confirm(
                   `文件 "${file.name}" 解析为 ${parsed.latin_name}\n` +
@@ -952,12 +981,21 @@ const app = createApp({
             continue;
           }
 
-          // 查找或创建植物记录
-          let plant = BotanicalDB.findPlantByLatinName(parsed.latin_name);
-          if (!plant && parsed.genus && parsed.species_epithet) {
-            // 拉丁名带命名人时精确匹配失败,降级用 genus + species_epithet 再查
-            plant = BotanicalDB.findPlantByBinomial(parsed.genus, parsed.species_epithet);
+          const pendingZhOnly = !parsed.genus && !parsed.species_epithet
+            && parsed.chinese_name
+            && /^\[PPBC\s+\d+\s+待定\]$/.test(String(parsed.latin_name).trim());
+
+          if (!pendingZhOnly && (!parsed.genus || !parsed.species_epithet)) {
+            importResults.value.push({
+              filename: file.name,
+              status: 'error',
+              message: '无法解析学名：文件名需含「属 种加词」或「纯中文类群名 + PPBC」'
+            });
+            continue;
           }
+
+          // 查找或创建植物记录（拉丁 + 种下加词 + 中文名 联合匹配）
+          let plant = BotanicalDB.findPlantForPPBC(parsed);
           let isNew = false;
           let isPending = false;
           let plantData = null;

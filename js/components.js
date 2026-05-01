@@ -1373,10 +1373,14 @@ const PlantDetailComponent = {
 
     function startEditMeta() {
       const p = currentPhoto.value;
+      const rawLoc = (p.location || '').trim();
+      const hasAdmCodes = !!(p.province_code || p.city_code || p.county_code);
+      const seedDetail = (p.location_detail || '').trim()
+        || (!hasAdmCodes && !p.admin_division && rawLoc ? rawLoc : '');
       metaForm.value = {
         photographer: p.photographer || '',
-        admin_division: p.admin_division || p.location || '',
-        location_detail: p.location_detail || '',
+        admin_division: p.admin_division || '',
+        location_detail: seedDetail,
         shot_date: p.shot_date || '',
         country_code: p.country_code || 'CN',
         province_code: p.province_code || '',
@@ -1683,6 +1687,10 @@ const PendingCardComponent = {
             </div>
           </div>
           <div class="pending-edit-row">
+            <label>中文名 <span class="pending-edit-hint">审定前可修订</span></label>
+            <input type="text" v-model="editChineseName" placeholder="物种中文名">
+          </div>
+          <div class="pending-edit-row">
             <label>简介 <span class="pending-edit-hint">可在审定前补充</span></label>
             <textarea v-model="editDescription" rows="3" placeholder="补充物种简介..."></textarea>
           </div>
@@ -1722,6 +1730,7 @@ const PendingCardComponent = {
     const rejectTargetId = ref(null);
     const rejectSuggestions = ref([]);
     const editDescription = ref(props.item.plant?.description || '');
+    const editChineseName = ref(props.item.plant?.chinese_name || '');
     const busy = ref(false);
     // 响应式照片副本（关键修复：原 item.photos 是 props，不会触发更新）
     const reactivePhotos = ref([]);
@@ -1751,6 +1760,9 @@ const PendingCardComponent = {
       try {
         if (props.item.plant && editDescription.value !== (props.item.plant.description || '')) {
           BotanicalDB.updateDescription(props.item.plant.id, editDescription.value);
+        }
+        if (props.item.plant && editChineseName.value !== (props.item.plant.chinese_name || '')) {
+          BotanicalDB.updatePlantField(props.item.plant.id, 'chinese_name', editChineseName.value.trim());
         }
         emit('approve', props.item);
       } catch (e) {
@@ -1819,9 +1831,13 @@ const PendingCardComponent = {
 
     onMounted(loadPhotoUrls);
     watch(() => props.item.photos?.length || 0, loadPhotoUrls);
+    watch(() => props.item.plant?.id, () => {
+      editDescription.value = props.item.plant?.description || '';
+      editChineseName.value = props.item.plant?.chinese_name || '';
+    });
 
     return { showReject, rejectLatin, rejectReason, rejectTargetId, rejectSuggestions,
-             editDescription, kindLabel, formatTime, approve, onRejectInput,
+             editDescription, editChineseName, kindLabel, formatTime, approve, onRejectInput,
              pickRejectTarget, confirmReject, busy, reactivePhotos, plantLatinNoAuth };
   }
 };
